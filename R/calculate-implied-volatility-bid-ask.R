@@ -23,13 +23,11 @@ calculate_implied_volatility <- function(option_data, option_distributions, opti
   loc_env <- environment()
   
   parallel::clusterEvalQ(cl
-                         , impl_vol_vectorized <- function(exercise, M, uniroot.control, ...){
-                           # , price, S, X, tau, r, q, tauD, D
-                           mapply(function(...) tryCatch(NMOF::vanillaOptionImpliedVol(...), error = function(e) NA_real_)
+                         , impl_vol_vectorized <- function(timeSteps = 150, gridPoints= 151, ...){
+                           mapply(function(...) tryCatch(RQuantLib::AmericanOptionImpliedVolatility(...), error = function(e) NA_real_)
                                   , ...
-                                  , MoreArgs = list(exercise = exercise
-                                                    , uniroot.control = uniroot.control
-                                                    , M = M
+                                  , MoreArgs = list(timeSteps = timeSteps
+                                                    , gridPoints = gridPoints
                                                     )
                                   , SIMPLIFY = TRUE
                                   , USE.NAMES = FALSE)
@@ -60,52 +58,40 @@ calculate_implied_volatility <- function(option_data, option_distributions, opti
                 # locate NAs in distribution (there might be NAs if no dividends before maturity) Tue Oct 16 16:52:16 2018 ------------------------------
                 loc_distr_data <- dplyr::mutate_if(loc_distr_data, .predicate = is.numeric, .funs = dplyr::funs(dplyr::if_else(is.na(.),0,.))) %>% distinct() %>% arrange(date, optionid)
                 
-                tauD_list <- loc_distr_data %>% plyr::dlply(.variables=c("date","optionid"), .fun = function(x) x %>% pull(time_to_distribution))
-                D_list <- loc_distr_data %>% plyr::dlply(.variables=c("date","optionid"), .fun = function(x) x %>% pull(dividend_amount))
+                # calculate implied div yield... for RQuantLib Thu Aug 15 11:08:38 2019 ------------------------------
+                loc_distr_data <- loc_distr_data %>% group_by(date, optionid) %>% summarise(dividend_amount = sum(dividend_amount))
+                
+                loc_data <- loc_data %>% left_join(loc_distr_data) %>% mutate(dividend_yield = dividend_amount / close * 1.0 / time_to_maturity)
+                
                 # calculate IV Tue Oct 16 15:53:22 2018 ------------------------------
                 loc_data <- dplyr::mutate(loc_data
-                                          ,impl_volatility_manual = impl_vol_vectorized(exercise = "american"
-                                                                                        , price = 0.5*(loc_data$best_bid+loc_data$best_offer)
-                                                                                        , S = loc_data$close
-                                                                                        , X = loc_data$strike_price/1000
-                                                                                        , tau = loc_data$time_to_maturity
-                                                                                        , r = loc_data$risk_free_rate
-                                                                                        , q = 0
-                                                                                        , tauD = tauD_list
-                                                                                        , D = D_list
+                                          ,impl_volatility_manual = impl_vol_vectorized(value = 0.5*(loc_data$best_bid+loc_data$best_offer)
+                                                                                        , underlying = loc_data$close
+                                                                                        , strike = loc_data$strike_price/1000
+                                                                                        , maturity = loc_data$time_to_maturity
+                                                                                        , riskFreeRate = loc_data$risk_free_rate
+                                                                                        , dividendYield = loc_data$dividend_yield
                                                                                         , type = dplyr::if_else(loc_data$cp_flag=="P","put","call")
-                                                                                        , M = 350
-                                                                                        , uniroot.control = list(interval = c(1e-2,2.5))
-                                                                                        )
+                                                                                        , volatility = dplyr::if_else(is.na(loc_data$impl_volatility), 0.2, impl_volatility))
                                           )
                 # calculate bid/ask true IV Tue Oct 16 16:07:40 2018 ------------------------------
                 loc_data <- dplyr::mutate(loc_data
-                                          , impl_volatility_manual_bid = impl_vol_vectorized(exercise = "american"
-                                                                                             , price = best_bid
-                                                                                             , S = loc_data$close
-                                                                                             , X = loc_data$strike_price/1000
-                                                                                             , tau = loc_data$time_to_maturity
-                                                                                             , r = loc_data$risk_free_rate
-                                                                                             , q = 0
-                                                                                             , tauD = tauD_list
-                                                                                             , D = D_list
+                                          , impl_volatility_manual_bid = impl_vol_vectorized(value = loc_data$best_bid
+                                                                                             , underlying = loc_data$close
+                                                                                             , strike = loc_data$strike_price/1000
+                                                                                             , maturity = loc_data$time_to_maturity
+                                                                                             , riskFreeRate = loc_data$risk_free_rate
+                                                                                             , dividendYield = loc_data$dividend_yield
                                                                                              , type = dplyr::if_else(loc_data$cp_flag=="P","put","call")
-                                                                                             , M = 350
-                                                                                             , uniroot.control = list(interval = c(1e-2,2.5))
-                                                                                             )
-                                          , impl_volatility_manual_offer = impl_vol_vectorized(exercise = "american"
-                                                                                             , price = best_offer
-                                                                                             , S = loc_data$close
-                                                                                             , X = loc_data$strike_price/1000
-                                                                                             , tau = loc_data$time_to_maturity
-                                                                                             , r = loc_data$risk_free_rate
-                                                                                             , q = 0
-                                                                                             , tauD = tauD_list
-                                                                                             , D = D_list
-                                                                                             , type = dplyr::if_else(loc_data$cp_flag=="P","put","call")
-                                                                                             , M = 350
-                                                                                             , uniroot.control = list(interval = c(1e-2,2.5))
-                                                                                             )
+                                                                                             , volatility = dplyr::if_else(is.na(loc_data$impl_volatility), 0.2, impl_volatility))
+                                          , impl_volatility_manual_offer = impl_vol_vectorized(value = loc_data$best_offer
+                                                                                               , underlying = loc_data$close
+                                                                                               , strike = loc_data$strike_price/1000
+                                                                                               , maturity = loc_data$time_to_maturity
+                                                                                               , riskFreeRate = loc_data$risk_free_rate
+                                                                                               , dividendYield = loc_data$dividend_yield
+                                                                                               , type = dplyr::if_else(loc_data$cp_flag=="P","put","call")
+                                                                                               , volatility = dplyr::if_else(is.na(loc_data$impl_volatility), 0.2, impl_volatility))
                 )
               
               loc_data
