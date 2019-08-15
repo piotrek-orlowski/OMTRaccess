@@ -2,6 +2,8 @@
 
 export(calculate_implied_volatility)
 export(fetch_equity_option_data)
+export(fetch_option_volume_data)
+export(fetch_stock_data)
 export(fetch_zero_coupon_curve)
 export(interpolate_zero_curve_for_options)
 export(match_distributions_with_options)
